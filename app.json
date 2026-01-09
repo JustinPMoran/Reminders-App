@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Reminders App",
+    "slug": "reminders-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#F9F8F6"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.remindersapp"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F9F8F6"
+      },
+      "package": "com.remindersapp",
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#D4AF37",
+          "sounds": []
+        }
+      ]
+    ]
+  }
+}
+
