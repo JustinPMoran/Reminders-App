@@ -4,6 +4,7 @@
     "slug": "reminders-app",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./appIcon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "resizeMode": "contain",
@@ -14,13 +15,17 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.remindersapp"
+      "bundleIdentifier": "com.justinmoran.remindersapp",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#F9F8F6"
       },
-      "package": "com.remindersapp",
+      "package": "com.justinmoran.remindersapp",
       "permissions": [
         "RECEIVE_BOOT_COMPLETED"
       ]
@@ -33,7 +38,11 @@
           "sounds": []
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "e80d3dc8-cc84-4860-9e6e-b42447721fce"
+      }
+    }
   }
 }
-
