@@ -21,6 +21,7 @@ const NOTIFICATIONS_INITIALIZED_DATE_KEY = 'notifications_initialized_date';
 export interface Reminder {
   id: string;
   title: string;
+  body?: string; // Optional body text for the notification
   hour: number;
   minute: number;
   isDaily: boolean;
@@ -100,7 +101,7 @@ export async function scheduleReminder(reminder: Reminder): Promise<string | nul
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
         title: reminder.title || 'Reminder',
-        body: `Time: ${reminder.hour.toString().padStart(2, '0')}:${reminder.minute.toString().padStart(2, '0')}`,
+        body: reminder.body || '', // Use custom body or empty string
         sound: true,
         priority: Notifications.AndroidNotificationPriority.HIGH,
       },

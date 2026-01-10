@@ -49,6 +49,7 @@ export default function App() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState(new Date());
   const [reminderTitle, setReminderTitle] = useState('');
+  const [reminderBody, setReminderBody] = useState('');
   const [isDaily, setIsDaily] = useState(true);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [noteTitle, setNoteTitle] = useState('');
@@ -151,6 +152,7 @@ export default function App() {
   const handleEditReminder = (reminder: Reminder) => {
     setEditingReminderId(reminder.id);
     setReminderTitle(reminder.title);
+    setReminderBody(reminder.body || '');
     const time = new Date();
     time.setHours(reminder.hour, reminder.minute, 0, 0);
     setSelectedTime(time);
@@ -177,6 +179,7 @@ export default function App() {
       const updatedReminder: Reminder = {
         ...existingReminder,
         title: reminderTitle.trim(),
+        body: reminderBody.trim() || undefined,
         hour: selectedTime.getHours(),
         minute: selectedTime.getMinutes(),
         isDaily,
@@ -201,6 +204,7 @@ export default function App() {
       const newReminder: Reminder = {
         id: `reminder_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         title: reminderTitle.trim(),
+        body: reminderBody.trim() || undefined,
         hour: selectedTime.getHours(),
         minute: selectedTime.getMinutes(),
         isDaily,
@@ -222,6 +226,7 @@ export default function App() {
 
     // Reset form
     setReminderTitle('');
+    setReminderBody('');
     setSelectedTime(new Date());
     setIsDaily(true);
     setEditingReminderId(null);
@@ -233,6 +238,7 @@ export default function App() {
     Keyboard.dismiss();
     setShowTimePicker(false);
     setReminderTitle('');
+    setReminderBody('');
     setSelectedTime(new Date());
     setIsDaily(true);
     setEditingReminderId(null);
@@ -263,9 +269,17 @@ export default function App() {
   };
 
   const formatTime = (hour: number, minute: number): string => {
-    const h = hour.toString().padStart(2, '0');
+    const period = hour >= 12 ? 'PM' : 'AM';
+    let h12 = hour;
+    if (hour === 0) {
+      h12 = 12; // Midnight (0:00) -> 12 AM
+    } else if (hour > 12) {
+      h12 = hour - 12; // Afternoon/evening (13-23) -> 1-11 PM
+    }
+    // hour 1-11 stays as is (AM), hour 12 stays as 12 (PM)
+    const h = h12.toString();
     const m = minute.toString().padStart(2, '0');
-    return `${h}:${m}`;
+    return `${h}:${m} ${period}`;
   };
 
   const handleEditNote = (note: Note) => {
@@ -424,9 +438,15 @@ export default function App() {
                 <View style={styles.noteContent}>
                   <Text style={styles.noteTitle}>{note.title}</Text>
                   {note.body ? (
-                    <Text style={styles.noteBody} numberOfLines={3}>
-                      {note.body}
-                    </Text>
+                    <ScrollView 
+                      style={styles.noteBodyScroll}
+                      nestedScrollEnabled={true}
+                      showsVerticalScrollIndicator={true}
+                    >
+                      <Text style={styles.noteBody}>
+                        {note.body}
+                      </Text>
+                    </ScrollView>
                   ) : null}
                   <Text style={styles.noteDate}>
                     {new Date(note.updatedAt).toLocaleDateString()}
@@ -453,6 +473,7 @@ export default function App() {
           if (currentTab === 'reminders') {
             setEditingReminderId(null);
             setReminderTitle('');
+            setReminderBody('');
             setSelectedTime(new Date());
             setIsDaily(true);
             setShowTimePicker(false);
@@ -505,6 +526,21 @@ export default function App() {
                         onChangeText={setReminderTitle}
                         placeholder="Enter reminder title"
                         placeholderTextColor="#6C6863"
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.inputLabel}>Notification Body (Optional)</Text>
+                    <View style={[styles.textInputWrapper, styles.reminderBodyWrapper]}>
+                      <TextInput
+                        style={[styles.textInput, styles.reminderBodyText]}
+                        value={reminderBody}
+                        onChangeText={setReminderBody}
+                        placeholder="Enter notification body text"
+                        placeholderTextColor="#6C6863"
+                        multiline
+                        textAlignVertical="top"
                       />
                     </View>
                   </View>
@@ -621,7 +657,7 @@ export default function App() {
 
                   <View style={styles.inputContainer}>
                     <Text style={styles.inputLabel}>Body</Text>
-                    <View style={[styles.textInputWrapper, styles.textAreaWrapper]}>
+                    <View style={styles.textAreaWrapper}>
                       <TextInput
                         style={[styles.textInput, styles.textArea]}
                         value={noteBody}
@@ -632,7 +668,10 @@ export default function App() {
                         textAlignVertical="top"
                       />
                     </View>
+                    <View style={styles.textAreaDivider} />
                   </View>
+                  
+                  
 
                   <View style={styles.modalButtons}>
                     <TouchableOpacity
@@ -938,10 +977,13 @@ const styles = StyleSheet.create({
     color: '#1A1A1A',
     marginBottom: 8,
   },
+  noteBodyScroll: {
+    maxHeight: 100,
+    marginBottom: 8,
+  },
   noteBody: {
     fontSize: 14,
     color: '#6C6863',
-    marginBottom: 8,
     lineHeight: 20,
   },
   noteDate: {
@@ -951,11 +993,26 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   textAreaWrapper: {
-    minHeight: 120,
+    height: 100,
     paddingTop: 8,
+    marginBottom: 8,
   },
   textArea: {
-    minHeight: 120,
+    height: 100,
+    fontSize: 16,
+    color: '#1A1A1A',
+  },
+  textAreaDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#1A1A1A',
+    marginTop: 8,
+  },
+  reminderBodyWrapper: {
+    minHeight: 40,
+    paddingTop: 8,
+  },
+  reminderBodyText: {
+    minHeight: 40,
     fontSize: 16,
     color: '#1A1A1A',
   },
