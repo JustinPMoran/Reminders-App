@@ -18,10 +18,26 @@ const NOTIFICATION_CHANNEL_ID = 'default';
 const NOTIFICATIONS_INITIALIZED_KEY = 'notifications_initialized';
 const NOTIFICATIONS_INITIALIZED_DATE_KEY = 'notifications_initialized_date';
 
+export type RecurrenceFrequency = 'day' | 'week' | 'month' | 'year';
+
+export interface RecurrenceOptions {
+  frequency: RecurrenceFrequency;
+  interval: number;
+  daysOfWeek?: number[]; // 0 for Sunday, 1 for Monday, etc.
+  until?: Date;
+}
+
 export interface Reminder {
   id: string;
   title: string;
   body?: string; // Optional body text for the notification
+  startDate: Date;
+  startTime: Date;
+  isAllDay: boolean;
+  isRecurring: boolean;
+  recurrence?: RecurrenceOptions;
+  // Keep legacy fields for a bit or migrate them? 
+  // Let's just use the new ones.
   hour: number;
   minute: number;
   isDaily: boolean;
@@ -72,44 +88,111 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
  */
 export async function scheduleReminder(reminder: Reminder): Promise<string | null> {
   try {
-    let trigger: Notifications.NotificationTriggerInput;
-
-    if (reminder.isDaily) {
-      // Daily repeating notification
-      trigger = {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
-        hour: reminder.hour,
-        minute: reminder.minute,
-      };
+    const scheduledTime = new Date(reminder.startDate);
+    if (reminder.isAllDay) {
+      scheduledTime.setHours(9, 0, 0, 0);
     } else {
-      // One-time notification with expiration
-      const now = new Date();
-      const scheduledTime = new Date();
-      scheduledTime.setHours(reminder.hour, reminder.minute, 0, 0);
-
-      // If the time has passed today, schedule for tomorrow
-      if (scheduledTime <= now) {
-        scheduledTime.setDate(scheduledTime.getDate() + 1);
-      }
-
-      trigger = {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: scheduledTime,
-      };
+      scheduledTime.setHours(reminder.startTime.getHours(), reminder.startTime.getMinutes(), 0, 0);
     }
 
-    const notificationId = await Notifications.scheduleNotificationAsync({
-      content: {
-        title: reminder.title || 'Reminder',
-        body: reminder.body || '', // Use custom body or empty string
-        sound: true,
-        priority: Notifications.AndroidNotificationPriority.HIGH,
-      },
-      trigger,
-      identifier: reminder.id, // Use stable identifier
-    });
+    if (!reminder.isRecurring) {
+      const now = new Date();
+      if (scheduledTime <= now) {
+        if (scheduledTime.toLocaleDateString() === now.toLocaleDateString()) {
+          scheduledTime.setDate(scheduledTime.getDate() + 1);
+        }
+      }
 
-    return notificationId;
+      const notificationId = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: reminder.title || 'Reminder',
+          body: reminder.body || '',
+          sound: true,
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: scheduledTime,
+        },
+        identifier: reminder.id,
+      });
+      return notificationId;
+    }
+
+    // Handle Recurring
+    const recurrence = reminder.recurrence || { frequency: 'day', interval: 1 };
+
+    if (recurrence.frequency === 'day') {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: reminder.title || 'Reminder',
+          body: reminder.body || '',
+          sound: true,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          hour: scheduledTime.getHours(),
+          minute: scheduledTime.getMinutes(),
+        },
+        identifier: reminder.id,
+      });
+    } else if (recurrence.frequency === 'week') {
+      const days = recurrence.daysOfWeek && recurrence.daysOfWeek.length > 0
+        ? recurrence.daysOfWeek
+        : [scheduledTime.getDay()];
+
+      for (const day of days) {
+        // JS Day: 0(Sun) - 6(Sat)
+        // Expo Weekday: 1(Sun) - 7(Sat)
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: reminder.title || 'Reminder',
+            body: reminder.body || '',
+            sound: true,
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+            weekday: day + 1,
+            hour: scheduledTime.getHours(),
+            minute: scheduledTime.getMinutes(),
+          },
+          identifier: `${reminder.id}_${day}`,
+        });
+      }
+    } else if (recurrence.frequency === 'month') {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: reminder.title || 'Reminder',
+          body: reminder.body || '',
+          sound: true,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
+          day: scheduledTime.getDate(),
+          hour: scheduledTime.getHours(),
+          minute: scheduledTime.getMinutes(),
+        },
+        identifier: reminder.id,
+      });
+    } else if (recurrence.frequency === 'year') {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: reminder.title || 'Reminder',
+          body: reminder.body || '',
+          sound: true,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.YEARLY,
+          month: scheduledTime.getMonth() + 1,
+          day: scheduledTime.getDate(),
+          hour: scheduledTime.getHours(),
+          minute: scheduledTime.getMinutes(),
+        },
+        identifier: reminder.id,
+      });
+    }
+
+    return reminder.id;
   } catch (error) {
     console.error('Error scheduling reminder:', error);
     return null;
@@ -121,7 +204,12 @@ export async function scheduleReminder(reminder: Reminder): Promise<string | nul
  */
 export async function cancelReminder(notificationId: string): Promise<boolean> {
   try {
+    // Try to cancel the main ID
     await Notifications.cancelScheduledNotificationAsync(notificationId);
+    // Try to cancel all possible day-specific variants
+    for (let i = 0; i <= 6; i++) {
+      await Notifications.cancelScheduledNotificationAsync(`${notificationId}_${i}`);
+    }
     return true;
   } catch (error) {
     console.error('Error canceling reminder:', error);

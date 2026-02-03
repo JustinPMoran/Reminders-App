@@ -24,7 +24,10 @@ import {
   markNotificationsInitialized,
   getAllScheduledNotifications,
   Reminder,
+  RecurrenceFrequency,
+  RecurrenceOptions,
 } from './utils/notifications';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 
 const REMINDERS_STORAGE_KEY = 'reminders';
 const NOTES_STORAGE_KEY = 'notes';
@@ -47,13 +50,25 @@ export default function App() {
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [selectedTime, setSelectedTime] = useState(new Date());
   const [reminderTitle, setReminderTitle] = useState('');
   const [reminderBody, setReminderBody] = useState('');
-  const [isDaily, setIsDaily] = useState(true);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [startDate, setStartDate] = useState(new Date());
+  const [startTime, setStartTime] = useState(new Date());
+  const [isAllDay, setIsAllDay] = useState(false);
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [noteTitle, setNoteTitle] = useState('');
   const [noteBody, setNoteBody] = useState('');
+
+  // Advanced Recurrence State
+  const [recurrenceFrequency, setRecurrenceFrequency] = useState<RecurrenceFrequency>('week');
+  const [recurrenceInterval, setRecurrenceInterval] = useState(1);
+  const [recurrenceDaysOfWeek, setRecurrenceDaysOfWeek] = useState<number[]>([new Date().getDay()]);
+  const [recurrenceUntilDate, setRecurrenceUntilDate] = useState<Date | undefined>(undefined);
+  const [showUntilDatePicker, setShowUntilDatePicker] = useState(false);
+  const [showFrequencyPicker, setShowFrequencyPicker] = useState(false);
+  const [showIntervalPicker, setShowIntervalPicker] = useState(false);
 
   // Initialize notifications on mount
   useEffect(() => {
@@ -74,9 +89,17 @@ export default function App() {
 
       // Check if we need to reschedule notifications
       const shouldInit = await shouldInitializeNotifications();
-      
+
       // Load reminders from storage
       const storedReminders = await loadReminders();
+
+      // Sort reminders by next occurrence
+      storedReminders.sort((a, b) => {
+        const nextA = calculateNextOccurrence(a);
+        const nextB = calculateNextOccurrence(b);
+        return nextA.getTime() - nextB.getTime();
+      });
+
       setReminders(storedReminders);
 
       // Load notes from storage
@@ -104,7 +127,13 @@ export default function App() {
         // Convert expiresAt strings back to Date objects
         return parsed.map((r: any) => ({
           ...r,
+          startDate: r.startDate ? new Date(r.startDate) : new Date(),
+          startTime: r.startTime ? new Date(r.startTime) : new Date(),
           expiresAt: r.expiresAt ? new Date(r.expiresAt) : undefined,
+          recurrence: r.recurrence ? {
+            ...r.recurrence,
+            until: r.recurrence.until ? new Date(r.recurrence.until) : undefined
+          } : undefined,
         }));
       }
       return [];
@@ -153,12 +182,68 @@ export default function App() {
     setEditingReminderId(reminder.id);
     setReminderTitle(reminder.title);
     setReminderBody(reminder.body || '');
-    const time = new Date();
-    time.setHours(reminder.hour, reminder.minute, 0, 0);
-    setSelectedTime(time);
-    setIsDaily(reminder.isDaily);
-    setShowTimePicker(false);
+    setStartDate(new Date(reminder.startDate));
+    setStartTime(new Date(reminder.startTime));
+    setIsAllDay(reminder.isAllDay);
+    setIsRecurring(reminder.isRecurring);
+
+    if (reminder.recurrence) {
+      setRecurrenceFrequency(reminder.recurrence.frequency);
+      setRecurrenceInterval(reminder.recurrence.interval);
+      setRecurrenceDaysOfWeek(reminder.recurrence.daysOfWeek || []);
+      setRecurrenceUntilDate(reminder.recurrence.until ? new Date(reminder.recurrence.until) : undefined);
+    } else {
+      setRecurrenceFrequency('week');
+      setRecurrenceInterval(1);
+      setRecurrenceDaysOfWeek([new Date().getDay()]);
+      setRecurrenceUntilDate(undefined);
+    }
+
+    setShowDatePicker(false);
+    setShowStartTimePicker(false);
+    setShowUntilDatePicker(false);
     setModalVisible(true);
+  };
+
+  const calculateNextOccurrence = (reminder: Reminder): Date => {
+    const now = new Date();
+    const scheduled = new Date(reminder.startDate);
+    scheduled.setHours(reminder.startTime.getHours(), reminder.startTime.getMinutes(), 0, 0);
+
+    if (scheduled > now) return scheduled;
+
+    if (reminder.isRecurring && reminder.recurrence) {
+      const { frequency, daysOfWeek } = reminder.recurrence;
+      const next = new Date(scheduled);
+
+      if (frequency === 'day') {
+        while (next <= now) next.setDate(next.getDate() + 1);
+        return next;
+      }
+
+      if (frequency === 'week') {
+        const activeDays = daysOfWeek && daysOfWeek.length > 0 ? daysOfWeek : [scheduled.getDay()];
+        while (true) {
+          if (next > now && activeDays.includes(next.getDay())) return next;
+          next.setDate(next.getDate() + 1);
+          // Safety break
+          if (next.getTime() > now.getTime() + 365 * 24 * 60 * 60 * 1000) break;
+        }
+        return next;
+      }
+
+      if (frequency === 'month') {
+        while (next <= now) next.setMonth(next.getMonth() + 1);
+        return next;
+      }
+
+      if (frequency === 'year') {
+        while (next <= now) next.setFullYear(next.getFullYear() + 1);
+        return next;
+      }
+    }
+
+    return scheduled; // Past one-time event
   };
 
   const handleSaveReminder = async () => {
@@ -167,80 +252,103 @@ export default function App() {
       return;
     }
 
+    const newReminderData = {
+      title: reminderTitle.trim(),
+      body: reminderBody.trim() || undefined,
+      startDate,
+      startTime,
+      isAllDay,
+      isRecurring,
+      hour: startTime.getHours(),
+      minute: startTime.getMinutes(),
+      isDaily: isRecurring && recurrenceFrequency === 'day',
+      recurrence: isRecurring ? {
+        frequency: recurrenceFrequency,
+        interval: recurrenceInterval,
+        daysOfWeek: recurrenceFrequency === 'week' ? recurrenceDaysOfWeek : undefined,
+        until: recurrenceUntilDate,
+      } : undefined,
+    };
+
+    let updatedReminders: Reminder[];
+
     if (editingReminderId) {
-      // Edit existing reminder
       const existingReminder = reminders.find((r) => r.id === editingReminderId);
       if (!existingReminder) return;
 
-      // Cancel old notification
       await cancelReminder(editingReminderId);
 
-      // Create updated reminder
       const updatedReminder: Reminder = {
         ...existingReminder,
-        title: reminderTitle.trim(),
-        body: reminderBody.trim() || undefined,
-        hour: selectedTime.getHours(),
-        minute: selectedTime.getMinutes(),
-        isDaily,
-        expiresAt: isDaily ? undefined : new Date(Date.now() + 24 * 60 * 60 * 1000),
+        ...newReminderData,
+        expiresAt: isRecurring ? undefined : new Date(startDate.getTime() + 24 * 60 * 60 * 1000),
       };
 
-      // Schedule new notification
       const notificationId = await scheduleReminder(updatedReminder);
       if (!notificationId) {
         Alert.alert('Error', 'Failed to schedule notification. Please try again.');
         return;
       }
 
-      // Update state and storage
-      const updatedReminders = reminders.map((r) =>
+      updatedReminders = reminders.map((r) =>
         r.id === editingReminderId ? updatedReminder : r
       );
-      setReminders(updatedReminders);
-      await saveReminders(updatedReminders);
     } else {
-      // Add new reminder
       const newReminder: Reminder = {
         id: `reminder_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        title: reminderTitle.trim(),
-        body: reminderBody.trim() || undefined,
-        hour: selectedTime.getHours(),
-        minute: selectedTime.getMinutes(),
-        isDaily,
-        expiresAt: isDaily ? undefined : new Date(Date.now() + 24 * 60 * 60 * 1000),
+        ...newReminderData,
+        expiresAt: isRecurring ? undefined : new Date(startDate.getTime() + 24 * 60 * 60 * 1000),
       };
 
-      // Schedule notification
       const notificationId = await scheduleReminder(newReminder);
       if (!notificationId) {
         Alert.alert('Error', 'Failed to schedule notification. Please try again.');
         return;
       }
 
-      // Update state and storage
-      const updatedReminders = [...reminders, newReminder];
-      setReminders(updatedReminders);
-      await saveReminders(updatedReminders);
+      updatedReminders = [...reminders, newReminder];
     }
+
+    // Sort reminders by next occurrence
+    updatedReminders.sort((a, b) => {
+      const nextA = calculateNextOccurrence(a);
+      const nextB = calculateNextOccurrence(b);
+      return nextA.getTime() - nextB.getTime();
+    });
+
+    setReminders(updatedReminders);
+    await saveReminders(updatedReminders);
 
     // Reset form
     setReminderTitle('');
     setReminderBody('');
-    setSelectedTime(new Date());
-    setIsDaily(true);
+    setStartDate(new Date());
+    setStartTime(new Date());
+    setIsAllDay(false);
+    setIsRecurring(false);
+    setRecurrenceFrequency('week');
+    setRecurrenceInterval(1);
+    setRecurrenceDaysOfWeek([new Date().getDay()]);
+    setRecurrenceUntilDate(undefined);
     setEditingReminderId(null);
-    setShowTimePicker(false);
+    setShowDatePicker(false);
+    setShowStartTimePicker(false);
+    setShowUntilDatePicker(false);
     setModalVisible(false);
   };
 
   const handleCloseModal = () => {
     Keyboard.dismiss();
-    setShowTimePicker(false);
     setReminderTitle('');
     setReminderBody('');
-    setSelectedTime(new Date());
-    setIsDaily(true);
+    setStartDate(new Date());
+    setStartTime(new Date());
+    setIsAllDay(false);
+    setIsRecurring(false);
+    setRecurrenceFrequency('week');
+    setRecurrenceInterval(1);
+    setRecurrenceDaysOfWeek([new Date().getDay()]);
+    setRecurrenceUntilDate(undefined);
     setEditingReminderId(null);
     setModalVisible(false);
   };
@@ -362,7 +470,7 @@ export default function App() {
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
-      
+
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>
@@ -397,10 +505,13 @@ export default function App() {
                 <View style={styles.reminderContent}>
                   <Text style={styles.reminderTitle}>{reminder.title}</Text>
                   <Text style={styles.reminderTime}>
-                    {formatTime(reminder.hour, reminder.minute)}
+                    {reminder.isAllDay
+                      ? 'All Day'
+                      : formatTime(reminder.startTime.getHours(), reminder.startTime.getMinutes())}
                   </Text>
-                  <Text style={styles.reminderType}>
-                    {reminder.isDaily ? 'Daily' : 'One-time'}
+                  <Text style={styles.reminderDate}>
+                    {new Date(reminder.startDate).toLocaleDateString()}
+                    {reminder.isRecurring ? ' • Recurring' : ' • One-time'}
                   </Text>
                 </View>
                 <View style={styles.reminderActions}>
@@ -438,7 +549,7 @@ export default function App() {
                 <View style={styles.noteContent}>
                   <Text style={styles.noteTitle}>{note.title}</Text>
                   {note.body ? (
-                    <ScrollView 
+                    <ScrollView
                       style={styles.noteBodyScroll}
                       nestedScrollEnabled={true}
                       showsVerticalScrollIndicator={true}
@@ -474,9 +585,12 @@ export default function App() {
             setEditingReminderId(null);
             setReminderTitle('');
             setReminderBody('');
-            setSelectedTime(new Date());
-            setIsDaily(true);
-            setShowTimePicker(false);
+            setStartDate(new Date());
+            setStartTime(new Date());
+            setIsAllDay(false);
+            setIsRecurring(false);
+            setShowDatePicker(false);
+            setShowStartTimePicker(false);
             setModalVisible(true);
           } else {
             setEditingNoteId(null);
@@ -499,14 +613,16 @@ export default function App() {
       >
         <TouchableWithoutFeedback onPress={() => {
           Keyboard.dismiss();
-          setShowTimePicker(false);
+          setShowDatePicker(false);
+          setShowStartTimePicker(false);
+          setShowUntilDatePicker(false);
         }}>
           <KeyboardAvoidingView
             style={styles.modalOverlay}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
           >
-            <TouchableWithoutFeedback onPress={() => {}}>
+            <TouchableWithoutFeedback onPress={() => { }}>
               <ScrollView
                 contentContainerStyle={styles.modalScrollContent}
                 keyboardShouldPersistTaps="handled"
@@ -545,56 +661,176 @@ export default function App() {
                     </View>
                   </View>
 
-                  <View style={styles.inputContainer}>
-                    <Text style={styles.inputLabel}>Time</Text>
-                    <TouchableOpacity
-                      style={styles.timeButton}
-                      onPress={() => {
-                        Keyboard.dismiss();
-                        setShowTimePicker(true);
-                      }}
-                    >
-                      <Text style={styles.timeButtonText}>
-                        {formatTime(selectedTime.getHours(), selectedTime.getMinutes())}
-                      </Text>
-                    </TouchableOpacity>
+                  <View style={styles.dateTimeRow}>
+                    <View style={styles.dateTimeColumn}>
+                      <Text style={styles.inputLabelSmall}>Start date</Text>
+                      <TouchableOpacity
+                        style={styles.pickerTrigger}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          setShowDatePicker(true);
+                        }}
+                      >
+                        <Text style={styles.pickerTriggerText}>
+                          {startDate.toLocaleDateString()}
+                        </Text>
+                        <MaterialIcons name="calendar-today" size={16} color="#6C6863" />
+                      </TouchableOpacity>
+                    </View>
+
+                    {!isAllDay && (
+                      <View style={styles.dateTimeColumn}>
+                        <Text style={styles.inputLabelSmall}>Start time</Text>
+                        <TouchableOpacity
+                          style={styles.pickerTrigger}
+                          onPress={() => {
+                            Keyboard.dismiss();
+                            setShowStartTimePicker(true);
+                          }}
+                        >
+                          <Text style={styles.pickerTriggerText}>
+                            {formatTime(startTime.getHours(), startTime.getMinutes())}
+                          </Text>
+                          <MaterialIcons name="keyboard-arrow-down" size={16} color="#6C6863" />
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
 
-                  {showTimePicker && (
-                    <View style={styles.datePickerContainer}>
-                      <DateTimePicker
-                        value={selectedTime}
-                        mode="time"
-                        is24Hour={false}
-                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                        onChange={(event, date) => {
-                          setShowTimePicker(Platform.OS === 'ios');
-                          if (date) {
-                            setSelectedTime(date);
-                          }
-                        }}
-                      />
-                    </View>
+                  {showDatePicker && (
+                    <DateTimePicker
+                      value={startDate}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, date) => {
+                        setShowDatePicker(Platform.OS === 'ios');
+                        if (date) setStartDate(date);
+                      }}
+                    />
                   )}
 
-                  <View style={styles.toggleContainer}>
+                  {showStartTimePicker && (
+                    <DateTimePicker
+                      value={startTime}
+                      mode="time"
+                      is24Hour={false}
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, date) => {
+                        setShowStartTimePicker(Platform.OS === 'ios');
+                        if (date) setStartTime(date);
+                      }}
+                    />
+                  )}
+
+                  <View style={styles.checkboxRow}>
                     <TouchableOpacity
-                      style={[styles.toggleOption, isDaily && styles.toggleOptionActive]}
-                      onPress={() => setIsDaily(true)}
+                      style={styles.checkboxContainer}
+                      onPress={() => setIsAllDay(!isAllDay)}
                     >
-                      <Text style={[styles.toggleText, isDaily && styles.toggleTextActive]}>
-                        Daily
-                      </Text>
+                      <View style={[styles.checkbox, isAllDay && styles.checkboxSelected]}>
+                        {isAllDay && <Text style={styles.checkboxCheck}>✓</Text>}
+                      </View>
+                      <Text style={styles.checkboxLabel}>All day</Text>
                     </TouchableOpacity>
+
                     <TouchableOpacity
-                      style={[styles.toggleOption, !isDaily && styles.toggleOptionActive]}
-                      onPress={() => setIsDaily(false)}
+                      style={styles.checkboxContainer}
+                      onPress={() => setIsRecurring(!isRecurring)}
                     >
-                      <Text style={[styles.toggleText, !isDaily && styles.toggleTextActive]}>
-                        One-time
-                      </Text>
+                      <Ionicons
+                        name={isRecurring ? "repeat" : "repeat-outline"}
+                        size={20}
+                        color="#1A1A1A"
+                      />
+                      <Text style={styles.checkboxLabel}>Recurring</Text>
                     </TouchableOpacity>
                   </View>
+
+                  {isRecurring && (
+                    <View style={styles.recurrenceOptions}>
+                      <View style={styles.recurrenceRow}>
+                        <Text style={styles.recurrenceLabel}>Repeat every</Text>
+                        <View style={styles.recurrencePickers}>
+                          <TouchableOpacity
+                            style={styles.smallPicker}
+                            onPress={() => setShowIntervalPicker(true)}
+                          >
+                            <Text style={styles.smallPickerText}>{recurrenceInterval}</Text>
+                            <MaterialIcons name="keyboard-arrow-down" size={16} color="#6C6863" />
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[styles.smallPicker, { minWidth: 80 }]}
+                            onPress={() => setShowFrequencyPicker(true)}
+                          >
+                            <Text style={styles.smallPickerText}>
+                              {recurrenceFrequency}{recurrenceInterval > 1 ? 's' : ''}
+                            </Text>
+                            <MaterialIcons name="keyboard-arrow-down" size={16} color="#6C6863" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+
+                      {recurrenceFrequency === 'week' && (
+                        <View style={styles.daysOfWeekRow}>
+                          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, index) => {
+                            const jsDayIndex = index === 6 ? 0 : index + 1;
+                            const isSelected = recurrenceDaysOfWeek.includes(jsDayIndex);
+                            return (
+                              <TouchableOpacity
+                                key={index}
+                                style={[styles.dayCircle, isSelected && styles.dayCircleSelected]}
+                                onPress={() => {
+                                  if (isSelected) {
+                                    setRecurrenceDaysOfWeek(recurrenceDaysOfWeek.filter(d => d !== jsDayIndex));
+                                  } else {
+                                    setRecurrenceDaysOfWeek([...recurrenceDaysOfWeek, jsDayIndex]);
+                                  }
+                                }}
+                              >
+                                <Text style={[styles.dayButtonText, isSelected && styles.dayButtonTextSelected]}>
+                                  {day}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      )}
+
+                      <View style={styles.recurrenceRow}>
+                        <Text style={styles.untilLabel}>Until</Text>
+                        <TouchableOpacity
+                          style={styles.untilPicker}
+                          onPress={() => setShowUntilDatePicker(true)}
+                        >
+                          <Text style={styles.untilPickerText}>
+                            {recurrenceUntilDate ? recurrenceUntilDate.toLocaleDateString() : 'Never'}
+                          </Text>
+                          <MaterialIcons name="keyboard-arrow-down" size={16} color="#616161" />
+                        </TouchableOpacity>
+                        {recurrenceUntilDate && (
+                          <TouchableOpacity
+                            onPress={() => setRecurrenceUntilDate(undefined)}
+                            style={{ marginLeft: 8 }}
+                          >
+                            <MaterialIcons name="delete-outline" size={20} color="#BF360C" />
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      {showUntilDatePicker && (
+                        <DateTimePicker
+                          value={recurrenceUntilDate || new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={(event, date) => {
+                            setShowUntilDatePicker(Platform.OS === 'ios');
+                            if (date) setRecurrenceUntilDate(date);
+                          }}
+                        />
+                      )}
+                    </View>
+                  )}
 
                   <View style={styles.modalButtons}>
                     <TouchableOpacity
@@ -615,6 +851,62 @@ export default function App() {
             </TouchableWithoutFeedback>
           </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
+
+        {showFrequencyPicker && (
+          <Modal transparent visible animationType="fade">
+            <TouchableOpacity
+              style={styles.pickerOverlay}
+              onPress={() => setShowFrequencyPicker(false)}
+            >
+              <View style={styles.pickerContent}>
+                <Text style={styles.modalTitleSmall}>Select Frequency</Text>
+                {(['day', 'week', 'month', 'year'] as RecurrenceFrequency[]).map((freq) => (
+                  <TouchableOpacity
+                    key={freq}
+                    style={styles.pickerOption}
+                    onPress={() => {
+                      setRecurrenceFrequency(freq);
+                      setShowFrequencyPicker(false);
+                    }}
+                  >
+                    <Text style={[styles.pickerOptionText, recurrenceFrequency === freq && styles.pickerOptionTextActive]}>
+                      {freq.charAt(0).toUpperCase() + freq.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </TouchableOpacity>
+          </Modal>
+        )}
+
+        {showIntervalPicker && (
+          <Modal transparent visible animationType="fade">
+            <TouchableOpacity
+              style={styles.pickerOverlay}
+              onPress={() => setShowIntervalPicker(false)}
+            >
+              <View style={styles.pickerContentScroll}>
+                <Text style={styles.modalTitleSmall}>Select Interval</Text>
+                <ScrollView>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 30].map((num) => (
+                    <TouchableOpacity
+                      key={num}
+                      style={styles.pickerOption}
+                      onPress={() => {
+                        setRecurrenceInterval(num);
+                        setShowIntervalPicker(false);
+                      }}
+                    >
+                      <Text style={[styles.pickerOptionText, recurrenceInterval === num && styles.pickerOptionTextActive]}>
+                        {num}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </TouchableOpacity>
+          </Modal>
+        )}
       </Modal>
 
       <Modal
@@ -631,7 +923,7 @@ export default function App() {
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
           >
-            <TouchableWithoutFeedback onPress={() => {}}>
+            <TouchableWithoutFeedback onPress={() => { }}>
               <ScrollView
                 contentContainerStyle={styles.modalScrollContent}
                 keyboardShouldPersistTaps="handled"
@@ -670,8 +962,8 @@ export default function App() {
                     </View>
                     <View style={styles.textAreaDivider} />
                   </View>
-                  
-                  
+
+
 
                   <View style={styles.modalButtons}>
                     <TouchableOpacity
@@ -693,6 +985,7 @@ export default function App() {
           </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
       </Modal>
+
     </View>
   );
 }
@@ -795,6 +1088,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  reminderDate: {
+    fontSize: 12,
+    color: '#6C6863',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   reminderActions: {
     flexDirection: 'row',
     gap: 8,
@@ -868,6 +1167,12 @@ const styles = StyleSheet.create({
     color: '#1A1A1A',
     marginBottom: 24,
     fontFamily: Platform.OS === 'ios' ? 'Playfair Display' : 'serif',
+  },
+  modalTitleSmall: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginBottom: 16,
   },
   inputContainer: {
     marginBottom: 24,
@@ -1015,6 +1320,186 @@ const styles = StyleSheet.create({
     minHeight: 40,
     fontSize: 16,
     color: '#1A1A1A',
+  },
+  dateTimeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+    gap: 16,
+  },
+  dateTimeColumn: {
+    flex: 1,
+  },
+  inputLabelSmall: {
+    fontSize: 11,
+    color: '#6C6863',
+    marginBottom: 4,
+  },
+  pickerTrigger: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#1A1A1A',
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pickerTriggerText: {
+    fontSize: 14,
+    color: '#1A1A1A',
+    fontWeight: '400',
+  },
+  pickerIcon: {
+    fontSize: 14,
+    color: '#6C6863',
+  },
+  pickerIconSmall: {
+    fontSize: 12,
+    color: '#6C6863',
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 32,
+    marginBottom: 32,
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderWidth: 1,
+    borderColor: '#1A1A1A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxCheck: {
+    fontSize: 14,
+    color: '#1A1A1A',
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#1A1A1A',
+  },
+  recurringIcon: {
+    fontSize: 18,
+    color: '#1A1A1A',
+  },
+  recurrenceOptions: {
+    backgroundColor: '#F5F4F2',
+    padding: 16,
+    marginBottom: 24,
+  },
+  recurrenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  recurrenceLabel: {
+    fontSize: 14,
+    color: '#6C6863',
+    marginRight: 12,
+  },
+  recurrencePickers: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  smallPicker: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minWidth: 40,
+  },
+  smallPickerText: {
+    fontSize: 14,
+    color: '#1A1A1A',
+    marginRight: 4,
+  },
+  daysOfWeekRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  dayCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#E0E0E0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayCircleSelected: {
+    backgroundColor: '#1A73E8',
+  },
+  dayButtonText: {
+    fontSize: 12,
+    color: '#1A1A1A',
+    fontWeight: '500',
+  },
+  dayButtonTextSelected: {
+    color: '#FFFFFF',
+  },
+  untilLabel: {
+    fontSize: 14,
+    color: '#6C6863',
+    marginRight: 12,
+  },
+  untilPicker: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 120,
+    justifyContent: 'space-between',
+  },
+  untilPickerText: {
+    fontSize: 14,
+    color: '#1A1A1A',
+  },
+  pickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pickerContent: {
+    backgroundColor: '#FFFFFF',
+    width: '80%',
+    padding: 16,
+    borderRadius: 8,
+  },
+  pickerContentScroll: {
+    backgroundColor: '#FFFFFF',
+    width: '80%',
+    maxHeight: '60%',
+    padding: 16,
+    borderRadius: 8,
+  },
+  pickerOption: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  pickerOptionText: {
+    fontSize: 16,
+    color: '#1A1A1A',
+  },
+  pickerOptionTextActive: {
+    color: '#1A73E8',
+    fontWeight: 'bold',
   },
 });
 
