@@ -1,4 +1,4 @@
-# Reminders App
+# Reminders App 
 
 A sophisticated Reminder App built with Expo and expo-notifications, featuring local push notifications with daily repeating and one-time reminder support.
 
